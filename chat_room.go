@@ -5,12 +5,17 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"math/rand"
+	//"math/rand"
 	"encoding/json"
 	"database/sql"
 	_ "github.com/mattn/go-sqlite3"
 	"golang.org/x/crypto/bcrypt"
 	"time"
+	"os"
+	"errors"
+	"path/filepath"
+	"crypto/rand"
+	"math/big"
 )
 
 
@@ -26,6 +31,7 @@ func initDB(){
 	
 }
 
+var dhPrime, _ = new(big.Int).SetString("FFFFFFFFFFFFFFFFC90FDAA22168C234...", 16)
 
 // My structs
 type Room struct{
@@ -58,7 +64,9 @@ func RandomString(length int) string {
     const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     result := make([]byte, length)
     for i := range result {
-        result[i] = charset[rand.Intn(len(charset))]
+    	charsetlength := big.NewInt(int64(len(charset)));
+    	n, _ := rand.Int(rand.Reader, charsetlength);
+        result[i] = charset[n.Int64()];
     }
     return string(result);
 }
@@ -99,27 +107,75 @@ func getIP(r *http.Request) (string, error){
 	return ip, nil
 }
 
+func createFile(id string, storagetype string, data string) bool{
+	homeDir, err := os.UserHomeDir();
+	if err != nil{
+		fmt.Printf("Could not find home directory: %v\n", err);
+		return false;
+	}
+	
+	filePath := filepath.Join(homeDir, ".chatroom", id, storagetype);
+	err = os.MkdirAll(filepath.Dir(filePath), 0700);
+	if err != nil{
+		fmt.Printf("Failed to create directory: %v\n", err);
+		return false;
+	}
+	//filePath := "~/.chatroom/" + id + "/" + storagetype;
+	if _, err := os.Stat(filePath); err == nil{
+		// path/to/whatever exists
+		return false;
+	} else if errors.Is(err, os.ErrNotExist){
+		f, err := os.Create(filePath);
+		if err != nil {
+			panic(err);
+		}
+
+		defer f.Close();
+
+		_, err = f.WriteString(data);
+		if err != nil{
+			panic(err);
+		}
+
+		f.Sync();
+		return true
+		//f.Close();
+	} else{
+		// Schrodinger file may or may not Exist
+		// Therefore, do not use !os.IsnotExist to test for file existence.
+		fmt.Println("File status unknown: ", err);
+		return false;
+	}
+}
+
 
 // Endpoints
 func createRoomHandler(w http.ResponseWriter, r *http.Request){
+	// validate request body
 	var body struct {
 		Name string `json:"name"`
 		Pass string `json:"passwd"`
+		Username string `json:"username"`
 	}
 
 	err := json.NewDecoder(r.Body).Decode(&body)
-	if err != nil || body.Name == "" || body.Pass == "" {
+	if err != nil || body.Name == "" || body.Pass == "" || body.Username == "" {
 		http.Error(w, "Invalid request body: name and passwd field", http.StatusBadRequest);
 		return 
 	}
 
 	roomName := body.Name;
+
+	// hash the password
 	roomPass, err := HashPassword(body.Pass);
 	if err != nil{
 		http.Error(w, "Error hashing password", http.StatusInternalServerError);
 		return;
 	}
+	
 	active_user := 1;
+
+	// get local or public ip address
 	ip, err := getIP(r);
 	if err != nil {
 		http.Error(w, "IP Address Error", http.StatusInternalServerError);
@@ -130,13 +186,36 @@ func createRoomHandler(w http.ResponseWriter, r *http.Request){
 		var existing string;
 		err := db.QueryRow(`SELECT id FROM rooms where id = ?;`, roomID).Scan(&existing);
 		if err == sql.ErrNoRows {
-				_, err = db.Exec(`INSERT INTO rooms (id, name, passwd, active_users, ip_one) VALUES (?,?,?,?,?);`, roomID, roomName, roomPass, active_user, ip);
+				_, err = db.Exec(`INSERT INTO rooms (id, name, passwd, username, active_users, ip_one) VALUES (?,?,?,?,?,?);`, roomID, roomName, roomPass, body.Username, active_user, ip);
 				if err != nil {
-					http.Error(w, "Database error", http.StatusInternalServerError);
+					http.Error(w, "Database R error", http.StatusInternalServerError);
 					return;
 				}
+				
+				// generate private key for Alice
+				pMinus2 := new(big.Int).Sub(dhPrime, big.NewInt(2))
+				privateKey, _ := rand.Int(rand.Reader, pMinus2);
+				privateKey.Add(privateKey, big.NewInt(2));
+				hexStr_private_key := privateKey.Text(16);
+
+				// write said private key to private.key file locally
+				status := createFile(roomID, "private.key", hexStr_private_key);
+				if !status{
+					http.Error(w, "Private Key Writing Error", http.StatusUnauthorized);
+					return;
+				}
+
+				// compute generator power Alice's private key and write to dh_exchange
+				two := big.NewInt(2);
+				exp_value := montladder(two, privateKey, dhPrime);
+				sent_value := exp_value.Text(16);
+				_, err = db.Exec(`INSERT INTO dh_exchange (room_id, username, sent_value) VALUES (?,?,?);`, roomID, body.Username, sent_value);
+				if err != nil{
+					http.Error(w, "Database DH error", http.StatusInternalServerError);
+					return;
+				}
+				
 				w.WriteHeader(http.StatusCreated);
-				//http.Redirect(w, r, ,http.StatusFound);
 				w.Write([]byte(roomID));
 				return;
 		} 	
@@ -197,6 +276,7 @@ func writeMessageHandler(w http.ResponseWriter, r *http.Request){
 				http.Error(w, "Database error", http.StatusInternalServerError);
 				return;
 			}
+		
 			//w.WriteHeader(http.StatusCreated);
 			w.Write([]byte("Msg Sent\n"));
 			return;
@@ -296,24 +376,29 @@ func waitHandler(w http.ResponseWriter, r *http.Request){
 }
 
 func joinRoomHandler(w http.ResponseWriter, r *http.Request){
+	// Clean Request Body
 	var body struct {
 		Name string `json:"name"`
 		Pass string `json:"passwd"`
+		Username string `json:"username"`
 	}
 
 	err := json.NewDecoder(r.Body).Decode(&body)
-	if err != nil || body.Name == "" || body.Pass == "" {
+	if err != nil || body.Name == "" || body.Pass == "" || body.Username{
 		http.Error(w, "Invalid request body: name field", http.StatusBadRequest);
 		return; 
 	}	
 
 	roomId := r.PathValue("id");
 
+	// Verify access to Room
 	_, err = verifyRoomAccess(roomId, body.Name, body.Pass);
 	if err != nil {
 		http.Error(w, "Access Denied", http.StatusUnauthorized);
 		return;
 	}	
+
+	// Get public or local IP
 	ip, err := getIP(r);
 	if err != nil {
 		http.Error(w, "IP Address Error", http.StatusInternalServerError);
@@ -327,13 +412,61 @@ func joinRoomHandler(w http.ResponseWriter, r *http.Request){
 		http.Error(w, "Room is full or does not exist", http.StatusForbidden);
 		return;
 	}
-	
+
+	// generate private key
+	pMinus2 := new(big.Int).Sub(dhPrime, big.NewInt(2))
+	privateKey, _ := rand.Int(rand.Reader, pMinus2);
+	privateKey.Add(privateKey, big.NewInt(2));
+	hexStr_private_key := privateKey.Text(16);
+
+	// write private key to file
+	status := createFile(roomId, "private.key", hexStr_private_key);
+	if !status{
+		http.Error(w, "Private Key Writing Error", http.StatusUnauthorized);
+		return;
+	}
+
+	// get Alice's sent_value
+	var hexStr string;
+	err = db.QueryRow(`SELECT sent_value FROM dh_exchange WHERE id=? AND username != ?`, roomId, body.Username).Scan(&hexStr);
+	if err != nil {
+		http.Error(w, "Database DH Error 2nd Client", http.StatusUnauthorized);
+		return;
+	}
+
+	n, success := new(big.Int).SetString(hexStr, 16)
+	if !success{
+		http.Error(w, "Hex Conversion Problem", http.StatusInternalServerError);
+		return;
+	}
+
+	// Generate Bob's own and insert to dh_exchange
+	exp_value := montladder(big.NewInt(2), privateKey, dhPrime);
+	sent_value := exp_value.Text(16);
+    _, err = db.Exec(`INSERT INTO dh_exchange (room_id, username, sent_value) VALUES (?,?,?);`, roomId, body.Username, sent_value);
+
+	//_, err = db.Exec(`UPDATE dh_exchange SET sent_value=? WHERE id=? AND username=?;`, sent_value, roomId, body.Username);
+	if err != nil{
+		http.Error(w, "Database DH error", http.StatusInternalServerError);
+		return;
+	}
+
+	// Alice sent_value power Bob's and write to dh_secret file
+	exp_value = montladder(n, privateKey, dhPrime);
+	sent_value = exp_value.Text(16);
+	status = createFile(roomId, "dh_secret.key", sent_value);
+	if !status{
+		http.Error(w, "Dh_secret Writing Error", http.StatusUnauthorized);
+		return;
+	}
+
+	// update active_users to 2
 	_, err = db.Exec(`UPDATE rooms SET active_users = 2, ip_two = ? WHERE id=?;`, ip, roomId);
 	if err != nil{
 	 	http.Error(w, "Database Update Error", http.StatusInternalServerError);
 	 	return;
 	}
-	
+
 	w.Write([]byte(fmt.Sprintf("Connected to Room: %s on %s\n", roomId, ip)));
 	return;
 }

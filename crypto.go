@@ -2,31 +2,41 @@ package main
 
 import (
 	"fmt"
-	"math/rand"
+	"crypto/rand"
 	"slices"
+	"math/big"
+	//"crypto/rand"
 )
 
-func fromBinary(bits []int) uint64{
-	var result uint64 = 0;
+func fromBinary(bits []int) *big.Int{
+	result := big.NewInt(0);
 	length_bits := len(bits);
 	for i:=0; i < length_bits; i++{
 		if bits[i] == 1 {
-			result |= (1 << i);
+			bit := new(big.Int).Lsh(big.NewInt(1), uint(i));
+			result.Or(result, bit);
+			//result |= (1 << i);
 		}
-		//fmt.Printf("The result is: %d\n", result);
 	}
 	
-	return uint64(result);
+	return result;
 }
 
 
-func generateCandidatePrime(bitlen *int) uint64{
-	length := *bitlen;
+func generateCandidatePrime(bitlen int) *big.Int{
+	//length := *bitlen;
 	
 	bits := []int{1};
 
-	for i:= 0; i < (length - 2); i++ {
-		bits = append(bits, rand.Intn(2));	
+	for i:= 0; i < (bitlen - 2); i++ {
+		//bits = append(bits, rand.Intn(2));
+		bit, err := rand.Int(rand.Reader, big.NewInt(2));
+		if err != nil{
+			panic(err);
+		}
+		bits = append(bits, int(bit.Int64()));	
+		//n, _ := rand.Int(rand.Reader, 2)
+		//bits = append(bits,n);
 	}
 	
 	bits = append(bits, 1);
@@ -34,158 +44,320 @@ func generateCandidatePrime(bitlen *int) uint64{
 	return fromBinary(bits);
 }
 
-func prepCandidate(candidate uint64) (uint64, uint64){
-	var s uint64 = 0;
-	var d uint64 = candidate - 1;
-	for (d % 2) == 0 {
-		d >>= 1;
-		s += 1;
+func prepCandidate(candidate *big.Int) (*big.Int, *big.Int){
+	s := big.NewInt(0);
+	//d := candidate - 1;
+	d := new(big.Int).Sub(candidate, big.NewInt(1));
+	// for (d % 2) == 0 {
+	// 	d >>= 1;
+	// 	s += 1;
+	// }
+	two := big.NewInt(2);
+	mod := new(big.Int);
+	for mod.Mod(d, two); mod.Cmp(big.NewInt(0)) == 0; mod.Mod(d, two){
+		d.Rsh(d,1);
+		s.Add(s, big.NewInt(1));
 	}
 	return s, d;
 }
 
-func toBinary(num uint64) []uint64 {
-	var bits []uint64;
-	if num == 0 {
-		return []uint64{0};
+func toBinary(num *big.Int) []*big.Int {
+	var bits []*big.Int;
+	// if num == 0 {
+	// 	return []big.Int{0};
+	// }
+	// for num > 0 {
+	// 	bits = append(bits, num%2);
+	// 	num = num >> 1;
+	// }
+	zero := big.NewInt(0);
+	two := big.NewInt(2);
+	if num.Cmp(zero) == 0 {
+		return []*big.Int{big.NewInt(0)};
 	}
-	for num > 0 {
-		bits = append(bits, num%2);
-		num = num >> 1;
+	n := new(big.Int).Set(num);
+	for n.Cmp(zero) > 0 {
+		mod := new(big.Int);
+		n.DivMod(n, two, mod);
+		bits = append(bits, new(big.Int).Set(mod))
 	}
-
 	return bits;
 }
 
-func modinv(n uint64, R uint64) uint64 {
-	var x uint64 = 1;
-	for i:=0; i<6; i++ {
-		x = x * (2 - n * x);
-	}	
-	return x & (R - 1);
+func computeR(modulus *big.Int) *big.Int{
+	R := big.NewInt(1);
+	for R.Cmp(modulus) <= 0 {
+		R.Lsh(R, 1);
+	}
+	return R;
 }
-
-func montgomeryRedc(T uint64, modulus uint64) uint64 {
-	var R uint64 = 1;
-	for R <= modulus  {
-		R <<= 1;
+// compute inverse using Newton raphson lifting
+func modinv(n *big.Int, R *big.Int) *big.Int {
+	x := big.NewInt(1);
+	two := big.NewInt(2);
+	mask := new(big.Int).Sub(R, big.NewInt(1));
+	for i:= 0; i < 64; i++{
+		nx := new(big.Int).Mul(n,x);
+		nx.Mod(nx, R);
+		t := new(big.Int).Sub(two, nx);
+		x.Mul(x,t);
+		x.And(x, mask);
 	}
-	var n_inv uint64 = modinv(modulus , R);
-	var n_prime uint64 = (R - n_inv) & (R - 1);
-	
-	var m uint64 = (T * n_prime) & (R - 1);
-	var t uint64 = (T + m * modulus) / R;
+	return x;
+}
+	// for i:=0; i<6; i++ {
+	// 	x = x * (2 - n * x);
+	// }	
+	// return x & (R - 1);
 
-	if t >= modulus {
-		t -= modulus;
+
+func montgomeryRedc(T *big.Int, modulus *big.Int) *big.Int {
+	//R :=  big.NewInt(1);
+	R := computeR(modulus);
+	mask := new(big.Int).Sub(R, big.NewInt(1));
+	nInv := modinv(modulus, R);
+	nPrime := new(big.Int).Sub(R, nInv);
+	nPrime.And(nPrime, mask);
+
+	m := new(big.Int).Mul(T, nPrime)
+	m.And(m, mask);
+
+	t:= new(big.Int).Mul(m, modulus);
+	t.Add(t, T)
+	t.Rsh(t, uint(R.BitLen()-1));
+
+	if t.Cmp(modulus) >= 0 {
+		t.Sub(t, modulus)
 	}
-	//fmt.Printf("t is : %d\n", t);
 	return t;
 }
 
-func montgomeryMult(a uint64, b uint64, modulus uint64) uint64 {
 
-	var R uint64 = 1;
-	for R <= modulus  {
-		R <<= 1;
-	}
-	var a_mont uint64 = (a*R) % modulus;
-	var b_mont uint64 = (b*R) % modulus;
+func montgomeryMult(a *big.Int, b *big.Int, modulus *big.Int) *big.Int {
 
-	//fmt.Printf("a,b,modulus, R, n_prime: %d %d %d %d %d\n", a, b, modulus, R, n_prime);
-	return montgomeryRedc(a_mont*b_mont, modulus);
+	//R := big.NewInt(1);
+	R := computeR(modulus);
+	aMont := new(big.Int).Mul(a,R);
+	aMont.Mod(aMont, modulus);
+
+	bMont := new(big.Int).Mul(b, R);
+	bMont.Mod(bMont, modulus);
+
+	product := new(big.Int).Mul(aMont, bMont);
+	return montgomeryRedc(product, modulus);
 }
 
 
-func montLadder(g uint64, k uint64, n uint64) uint64{
-	var r_0 uint64 = montgomeryMult(1,1,n);
-	var r_1 uint64 = montgomeryMult(g,1,n);
+
+
+func montladder(g *big.Int, k *big.Int, n *big.Int) *big.Int{
+	r0 := montgomeryMult(big.NewInt(1), big.NewInt(1), n);
+	r1 := montgomeryMult(g, big.NewInt(1), n);
+
 	binK := toBinary(k);
-	slices.Reverse(binK[:]);
-	for _, bit := range binK	{
-		if bit == 0 {
-			r_1 = montgomeryRedc(r_1*r_0, n); // (r_1 * r_0) % n;
-			r_0 = montgomeryRedc(r_0*r_0, n); //(r_0 * r_0) % n;
-		} else{
-			r_0 = montgomeryRedc(r_1*r_0, n); //(r_1 * r_0) % n;
-			r_1 = montgomeryRedc(r_1*r_1, n); //(r_1 * r_1) % n;
+	slices.Reverse(binK);
+
+	for _, bit := range binK{
+		if bit.Cmp(big.NewInt(0)) == 0 {
+			product := new(big.Int).Mul(r1, r0);
+			r1 = montgomeryRedc(product, n);
+			product = new(big.Int).Mul(r0, r0);
+			r0 = montgomeryRedc(product, n);
+		}else{
+			product := new(big.Int).Mul(r1, r0);
+			r0 = montgomeryRedc(product, n);
+			product = new(big.Int).Mul(r1, r1);
+			r1 = montgomeryRedc(product, n);			
 		}
 	}
-	return montgomeryRedc(r_0, n);
+	return montgomeryRedc(r0, n);
 }
 
-func MillerRabin(s *uint64, d *uint64, rounds int) bool {
-	// n = (2^s * d) + 1. Therefore n - 1 = 2^s * d
-	nMinusOne := (uint64(1) << *s) * (*d)
-	n := nMinusOne + 1
 
-	for i := 0; i < rounds; i++ {
-		a := uint64(rand.Int63n(int64(n-3))) + 2;
-		
-		x := montLadder(a, *d, n);
 
-		if x == 1 || x == nMinusOne {
+func MillerRabin(s *big.Int, d *big.Int, rounds int) bool{
+	nMinusOne := new(big.Int).Lsh(big.NewInt(1), uint(s.Uint64()));
+	nMinusOne.Mul(nMinusOne, d);
+	n := new(big.Int).Add(nMinusOne, big.NewInt(1));
+
+	nMinus3 := new(big.Int).Sub(n, big.NewInt(3));
+
+	for i:= 0; i < rounds; i++{
+		//aInt, _:= rand.Int(rand.New(rand.NewSource(rand.Int63())), nMinus3);
+		aInt, err := rand.Int(rand.Reader, nMinus3);
+		if err != nil {
+			panic(err);
+		}
+		a := new(big.Int).Add(aInt, big.NewInt(2));
+
+		x:= montladder(a, d, n);
+
+		one := big.NewInt(1);
+		if x.Cmp(one) == 0 || x.Cmp(nMinusOne) == 0{
 			continue
 		}
 
-		composite := true
-		for r := uint64(1); r < *s; r++ {
-			// We need x = x^2 % n. 
-			x = montLadder(x, 2, n);// (x * x) % n 
-
-			if x == nMinusOne {
+		composite := true;
+		r := big.NewInt(1)
+		for r.Cmp(s) < 0 {
+			x = montladder(x, big.NewInt(2), n);
+			if x.Cmp(nMinusOne) == 0{
 				composite = false;
-				break
+				break;
 			}
+			r.Add(r, big.NewInt(1));
 		}
 
-		if composite {
+		if composite{
 			return false
 		}
 	}
 
-	return true // Probably prime
+	return true;
 }
 
 
-func DiffieHellman(rounds int){
-	var genModulus [2]uint64; // [modulus, generator]
-	var bitLength int = 256;
+
+
+
+func generatePrime(bitLength int, rounds int) *big.Int{
 	for {
-		candidatePrime := generateCandidatePrime(&bitLength);
+		candidatePrime := generateCandidatePrime(bitLength);
 		s, d := prepCandidate(candidatePrime);
-		ok := MillerRabin(&s, &d, rounds);
-		if ok{
-			possiblePrime := ((1 << s) * d) + 1;
-			genModulus = append(genModulus, possiblePrime);
-			break; 
+		if MillerRabin(s, d, rounds){
+			//possiblePrime =  ((1 << s) * d) + 1;
+			return candidatePrime; 
 		}
 	}
-	genModulus = append(genModulus, uint64(rand.Int63n(genModulus[0])));
-
-	return 0;
 }
+
 
 func main(){
-	var bitLength int = 5;
-	largePrime := generateCandidatePrime(&bitLength);
-	s, d := prepCandidate(largePrime);
-	fmt.Printf("------------------------------\n");
-	fmt.Printf("The large Prime is: %d\n", largePrime);
-	fmt.Printf("------------------------------\n");
-	fmt.Printf("Candidate Prep: %d \t %d\n", s, d);
-	fmt.Printf("Verification: 2^%d * %d = %d\n", s, d, (1<<s)*d);
-	fmt.Printf("------------------------------\n");
-	// var num uint64 = 25;
-	// bits := toBinary(num);
-	// length := len(bits);
-	// for i:=0; i < length; i++{
-	// 	fmt.Printf("To binary is: %d\n",bits[i]);	
-	// }
-	fmt.Printf("Miller Rabin : %t\n", MillerRabin(&s, &d, 20));
-	fmt.Printf("------------------------------\n");
-	var g, k, n uint64 = 5, 11, 7;
-	fmt.Printf("Mont ladder: %d\n", montLadder(g, k, n));
-	// var result uint64 = montgomeryMult(5,3,11);
-	// fmt.Printf("Montgomery multiplication : %d\n", montgomeryRedc(result, 11));
+	bitLength := 16;
+	fmt.Println("=================================");
+
+	candidate := generateCandidatePrime(bitLength);
+	s, d := prepCandidate(candidate);
+
+	fmt.Printf("Candidate:	%d\n", candidate);
+
+	fmt.Printf("Miller-Rabin: %t\n", MillerRabin(s,d, 20));
+	fmt.Println("==================================");
+
+	g := big.NewInt(5);
+	k := big.NewInt(11);
+	n := big.NewInt(7);
+	fmt.Printf("Mont ladder 5^11 mod 7: %d (expected 3)\n", montladder(g,k,n));
+
+	fmt.Printf("Prime:		%d\n", generatePrime(bitLength, 20));
 }
+
+
+// 	for R <= modulus  {
+// 		R <<= 1;
+// 	}
+// 	var n_inv big.Int = modinv(modulus , R);
+// 	var n_prime big.Int = (R - n_inv) & (R - 1);
+// 	
+// 	var m big.Int = (T * n_prime) & (R - 1);
+// 	var t big.Int = (T + m * modulus) / R;
+// 
+// 	if t >= modulus {
+// 		t -= modulus;
+// 	}
+// 	//fmt.Printf("t is : %d\n", t);
+// 	return t;
+// }
+
+
+// 	for R <= modulus  {
+// 		R <<= 1;
+// 	}
+// 	var a_mont big.Int = (a*R) % modulus;
+// 	var b_mont big.Int = (b*R) % modulus;
+// 
+// 	//fmt.Printf("a,b,modulus, R, n_prime: %d %d %d %d %d\n", a, b, modulus, R, n_prime);
+// 	return montgomeryRedc(a_mont*b_mont, modulus);
+// }
+
+// func montLadder(g big.Int, k big.Int, n big.Int) big.Int{
+// 	var r_0 big.Int = montgomeryMult(1,1,n);
+// 	var r_1 big.Int = montgomeryMult(g,1,n);
+// 	binK := toBinary(k);
+// 	slices.Reverse(binK[:]);
+// 	for _, bit := range binK	{
+// 		if bit == 0 {
+// 			r_1 = montgomeryRedc(r_1*r_0, n); // (r_1 * r_0) % n;
+// 			r_0 = montgomeryRedc(r_0*r_0, n); //(r_0 * r_0) % n;
+// 		} else{
+// 			r_0 = montgomeryRedc(r_1*r_0, n); //(r_1 * r_0) % n;
+// 			r_1 = montgomeryRedc(r_1*r_1, n); //(r_1 * r_1) % n;
+// 		}
+// 	}
+// 	return montgomeryRedc(r_0, n);
+// }
+
+// func MillerRabin(s *big.Int, d *big.Int, rounds int) bool {
+// 	// n = (2^s * d) + 1. Therefore n - 1 = 2^s * d
+// 	nMinusOne := (big.Int(1) << *s) * (*d)
+// 	n := nMinusOne + 1
+// 
+// 	for i := 0; i < rounds; i++ {
+// 		a := big.Int(rand.Int63n(int64(n-3))) + 2;
+// 		
+// 		x := montLadder(a, *d, n);
+// 
+// 		if x == 1 || x == nMinusOne {
+// 			continue
+// 		}
+// 
+// 		composite := true
+// 		for r := big.Int(1); r < *s; r++ {
+// 		 
+// 			x = montLadder(x, 2, n);// (x * x) % n 
+// 
+// 			if x == nMinusOne {
+// 				composite = false;
+// 				break
+// 			}
+// 		}
+// 
+// 		if composite {
+// 			return false
+// 		}
+// 	}
+// 
+// 	return true // Probably prime
+// }
+
+// Just use 2 as the generator
+// func generateGenerator(modulus big.Int) big.Int{
+// 	return big.Int(rand.Int63n(modulus));
+// }
+
+
+
+
+// func main(){
+// 	var bitLength int = 5;
+// 	largePrime := generateCandidatePrime(&bitLength);
+// 	s, d := prepCandidate(largePrime);
+// 	fmt.Printf("------------------------------\n");
+// 	fmt.Printf("The large Prime is: %d\n", largePrime);
+// 	fmt.Printf("------------------------------\n");
+// 	fmt.Printf("Candidate Prep: %d \t %d\n", s, d);
+// 	fmt.Printf("Verification: 2^%d * %d = %d\n", s, d, (1<<s)*d);
+// 	fmt.Printf("------------------------------\n");
+// 	// var num big.Int = 25;
+// 	// bits := toBinary(num);
+// 	// length := len(bits);
+// 	// for i:=0; i < length; i++{
+// 	// 	fmt.Printf("To binary is: %d\n",bits[i]);	
+// 	// }
+// 	fmt.Printf("Miller Rabin : %t\n", MillerRabin(&s, &d, 20));
+// 	fmt.Printf("------------------------------\n");
+// 	var g, k, n big.Int = 5, 11, 7;
+// 	fmt.Printf("Mont ladder: %d\n", montLadder(g, k, n));
+// 	// var result big.Int = montgomeryMult(5,3,11);
+// 	// fmt.Printf("Montgomery multiplication : %d\n", montgomeryRedc(result, 11));
+// }
