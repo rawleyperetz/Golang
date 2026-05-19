@@ -1,10 +1,11 @@
 package main
 
 import (
-	"fmt"
+	//"fmt"
 	"crypto/rand"
 	"slices"
 	"math/big"
+	//"encoding/hex"
 	//"crypto/rand"
 )
 
@@ -150,7 +151,7 @@ func montgomeryMult(a *big.Int, b *big.Int, modulus *big.Int) *big.Int {
 
 
 
-func montladder(g *big.Int, k *big.Int, n *big.Int) *big.Int{
+func montLadder(g *big.Int, k *big.Int, n *big.Int) *big.Int{
 	r0 := montgomeryMult(big.NewInt(1), big.NewInt(1), n);
 	r1 := montgomeryMult(g, big.NewInt(1), n);
 
@@ -190,7 +191,7 @@ func MillerRabin(s *big.Int, d *big.Int, rounds int) bool{
 		}
 		a := new(big.Int).Add(aInt, big.NewInt(2));
 
-		x:= montladder(a, d, n);
+		x:= montLadder(a, d, n);
 
 		one := big.NewInt(1);
 		if x.Cmp(one) == 0 || x.Cmp(nMinusOne) == 0{
@@ -200,7 +201,7 @@ func MillerRabin(s *big.Int, d *big.Int, rounds int) bool{
 		composite := true;
 		r := big.NewInt(1)
 		for r.Cmp(s) < 0 {
-			x = montladder(x, big.NewInt(2), n);
+			x = montLadder(x, big.NewInt(2), n);
 			if x.Cmp(nMinusOne) == 0{
 				composite = false;
 				break;
@@ -232,25 +233,97 @@ func generatePrime(bitLength int, rounds int) *big.Int{
 }
 
 
-func main(){
-	bitLength := 16;
-	fmt.Println("=================================");
+func simpleXORCipher(msgString string, dhHexStr string) string{
+	lengthOfHexStr := len(dhHexStr);
+	lengthOfMsgStr := len(msgString);
 
-	candidate := generateCandidatePrime(bitLength);
-	s, d := prepCandidate(candidate);
-
-	fmt.Printf("Candidate:	%d\n", candidate);
-
-	fmt.Printf("Miller-Rabin: %t\n", MillerRabin(s,d, 20));
-	fmt.Println("==================================");
-
-	g := big.NewInt(5);
-	k := big.NewInt(11);
-	n := big.NewInt(7);
-	fmt.Printf("Mont ladder 5^11 mod 7: %d (expected 3)\n", montladder(g,k,n));
-
-	fmt.Printf("Prime:		%d\n", generatePrime(bitLength, 20));
+	// here, we allocate a byte slice of target length
+	resultBytes := make([]byte, lengthOfMsgStr);
+	
+	for i:=0; i < lengthOfMsgStr; i++{
+		resultBytes[i] =  msgString[i] ^ dhHexStr[i % lengthOfHexStr];
+	}
+	
+	return string(resultBytes);
 }
+
+func extGCD(a *big.Int, b *big.Int) (*big.Int, *big.Int, *big.Int) {
+    if a.Cmp(big.NewInt(0)) == 0 {
+        return b, big.NewInt(0), big.NewInt(1)
+    }
+    mod := new(big.Int).Mod(b, a)
+    g, x, y := extGCD(mod, a)
+    newX := new(big.Int).Sub(y, new(big.Int).Mul(new(big.Int).Div(b, a), x))
+    return g, newX, x
+}
+
+func modInvEGCD(e *big.Int, phi *big.Int) *big.Int {
+    _, x, _ := extGCD(e, phi)
+    // ensure positive
+    x.Mod(x, phi)
+    if x.Cmp(big.NewInt(0)) < 0 {
+        x.Add(x, phi)
+    }
+    return x
+}
+
+
+// func main(){
+// 	test := big.NewInt(65537)
+// 	fmt.Printf("test: %s\n", test.Text(16))
+// }
+// 
+ // func main(){
+ // 	a := big.NewInt(17);
+ // 	b := big.NewInt(19);
+ // 	m := big.NewInt(23);
+ // 	fmt.Printf("Montgomery form is: %d\n", montgomeryMult(a,b,m));
+// 	p := generatePrime(128, 20)
+// 	q := generatePrime(128, 20)
+// 	pubExp := big.NewInt(65537)
+// 	pMinus1 := new(big.Int).Sub(p, big.NewInt(1))
+// 	qMinus1 := new(big.Int).Sub(q, big.NewInt(1))
+// 	totient := new(big.Int).Mul(pMinus1, qMinus1)
+// 	n := new(big.Int).Mul(p, q)
+// 	d := modInvEGCD(pubExp, totient)
+// 	
+// 	msg := "hello"
+// 	m := new(big.Int).SetBytes([]byte(msg))
+// 	fmt.Printf("m < n: %v\n", m.Cmp(n) < 0)
+// 	
+// 	c := montLadder(m, pubExp, n)
+// 	decrypted := montLadder(c, d, n)
+// 	fmt.Printf("Original:  %s\n", msg)
+// 	fmt.Printf("Decrypted: %s\n", string(decrypted.Bytes()))
+// 	fmt.Printf("Match: %v\n", m.Cmp(decrypted) == 0)
+//}
+//  func main(){
+// // 
+// // 	encrypted := simpleXORCipher("DH_VERIFIED+password", "jksklahoijwoahgfGHHUIGIKUIBHUI");
+// // 	fmt.Printf("Encryption: %v\n", []byte(encrypted));
+// // 	fmt.Printf("Encrypted (hex) : %s\n", hex.EncodeToString([]byte(encrypted)));
+// // // 	bitLength := 16;
+// // // 	fmt.Println("=================================");
+// // // 
+// // // 	candidate := generateCandidatePrime(bitLength);
+// // // 	s, d := prepCandidate(candidate);
+// // // 
+// // // 	fmt.Printf("Candidate:	%d\n", candidate);
+// // // 
+// // // 	fmt.Printf("Miller-Rabin: %t\n", MillerRabin(s,d, 20));
+// // // 	fmt.Println("==================================");
+// // // 
+// 	// g := big.NewInt(5);
+// 	// k := big.NewInt(11);
+// 	// n := big.NewInt(7);
+//  // 	fmt.Printf("Mont ladder 5^11 mod 7: %d (expected 3)\n", montLadder(g,k,n));
+// 	e := big.NewInt(5);
+// 	totient := big.NewInt(11);
+//  	fmt.Printf("Inv 5^{-1} mod 11: %d (expected 9)\n", modInvEGCD(e, totient));
+// 
+// // // 
+// // // 	fmt.Printf("Prime:		%d\n", generatePrime(bitLength, 20));
+// }
 
 
 // 	for R <= modulus  {
