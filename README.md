@@ -105,7 +105,7 @@ has been assigned to $2$. If it has, then it means Bob has entered. Also we stor
 - If the result is "DH_VERIFIED"+Password then the key exchange was successful otherwise room has been compromised.
 
 #### RSA Key Generation
-- She then generates primes p, q , e (in this project e=65537 is fixed where e is the public exponent)and composite totient (\phi(n) = (p-1)*(q-1)) such that  
+- She then generates primes p, q , e (in this project e=65537 is fixed where e is the public exponent)and composite totient ($\phi(n) = (p-1)*(q-1)$) such that  
 the gcd(e,totient) = 1. Why? so that the computation of the inverse of e is valid i.e. e*d \equiv 1 mod totient where d is the private key (not private key used in DH).
 Also note that the modulus = p*q.
 - She computes the private key, d (which is the inverse of e mod totient) by using the helper function _modInvEGCD_ (found in crypto.go)
