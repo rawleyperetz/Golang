@@ -47,7 +47,7 @@ Table name: rsa_keys
 		FOREIGN KEY (room_id) REFERENCES rooms(id)
 ```
 
-We also generate a DhPrime (a Diffie-Hellman Prime) using a couple of helper functions (See DH topic way below (not Diffie Hellman topic))
+We also generate a DhPrime (a Diffie-Hellman Prime) using a couple of helper functions
 All these tables and DhPrime are initialized at the start of the http server if they do not already exists.
 
 ## End Points
@@ -61,6 +61,8 @@ The following are the list of endpoints for this project
 
 ### End Points Intricacies
 We begin discussing the intricacies of each endpoint discussed above
+
+
 
 1. POST /rooms
 This end point creates a room where users can communicate. And it goes as follows.
@@ -81,6 +83,8 @@ safe prime.
 - The result of the above computation is converted to a hex and stored as *sent_value* field of the *dh_exchange* table along with the other 
 necessary fields.
 - We write to the Alice saying that *the room has been created*
+
+
 
 2. GET /rooms/{id}/wait
 After Alice has created the room, we immediately begins this endpoint to check if her friend Bob has connected. This endpoint
@@ -109,6 +113,8 @@ Also note that the modulus = p*q.
 - Then the modulus and public key, e are converted to hex and stored in the *rsa_keys* table.
 - We write to Alice saying showing the two ips (hers and Bob's) are connected.
 
+
+
 3. POST /rooms/{id}/join
 So here we assume that Alice has created a room and is in the waiting endpoint. This is then is about Bob's connection
 - We validate Bob's http Request just as was done with Alice in the previous end point
@@ -129,3 +135,29 @@ local file *dh_secret.key* (this process is the same as in the subtopic above (D
 In this endpoints, we assume either Alice or Bob wishes to write a message to their partner. This end point goes as follows
 - We validate the http Request Body just as was done in the previous end-point above.
 - We verify user's credential by checking if he or she has access to the room.
+- We enter a loop and generate a random ID for the message. If the id exists, the loop continues else we proceed.
+- We then select the public exponent and modulus of our destination partner from the *rsa_keys* table.
+- We convert the public exponent and modulus from hexadecimal to big Int data type
+- We convert also the message (passed in the request Body) to big Int data type.
+- Then we compute $msg^{public_exponent} \mod modulus$ for the rsa encryption.
+- The resulting ciphertext is converted to hexadecimal and stored in the *content* of the *messages* table.
+- We write to the User "Msg Sent".
+
+
+
+5. GET /rooms/{id}/messages
+In this endpoint, we assume either Alice or Bob wishes to retrieve messages write by their counterpart. This endpoint goes as follows
+- We validate the http Request Body just as was done in the previous end-pont above.
+- We verify user's credential by checking if he or she has access to the room.
+- We get all rows from our counterpart in the *messages* table.
+- We also retrieve our public_exponent and modulus from the *rsa_keys* table.
+- For each message (content) in our rows, we perform the rsa blinding. 
+
+#### RSA Blinding
+For each row of our messages, we compute the following:
+- We convert the msg from hexadecimal to big Int data type
+- We then compute a random, $r$ such that $0 < r \leq modulus - 2$ and $\gcd(r, modulus)$
+- We compute $c' \equiv c * r^e \mod modulus$
+- We decrypt with $m' = (c')^d \mod modulus$
+- Then $m \equiv m' * r^{-1} \mod modulus$
+- Then we display the decrypted messages.
